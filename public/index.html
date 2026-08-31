@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Minimal Redis Trade POC</title>
+</head>
+<body>
+
+  <h2>OMS Redis Trade POC</h2>
+  <p><strong>Redis Status:</strong> <span id="redisStatus">Checking...</span></p>
+  <button onclick="resetCache()">Reset All Redis Data</button>
+
+  <hr>
+
+  <h3>1. Execute Buy Trade</h3>
+  <form id="tradeForm" onsubmit="handleTrade(event)">
+    <p>
+      <label>Account ID: </label><br>
+      <input type="text" id="account" value="ACC_001" required placeholder="e.g. ACC_001 or 002">
+    </p>
+    <p>
+      <label>Symbol: </label><br>
+      <input type="text" id="symbol" value="AAPL" required placeholder="e.g. AAPL, TSLA">
+    </p>
+    <p>
+      <label>Quantity: </label><br>
+      <input type="number" id="quantity" value="10" step="any" min="1" required>
+    </p>
+    <p>
+      <label>Price ($): </label><br>
+      <input type="number" id="price" value="150.00" step="any" min="0.01" required>
+    </p>
+    <p>
+      <button type="submit" id="submitBtn">Submit Buy Order</button>
+    </p>
+  </form>
+
+  <hr>
+
+  <h3>2. Positions Cache (All Accounts in Redis Hashes)</h3>
+  <button onclick="loadPositions()">Refresh Positions</button>
+  <table border="1" cellpadding="6" cellspacing="0" style="margin-top: 10px; width: 100%; max-width: 800px;">
+    <thead>
+      <tr style="background: #eee;">
+        <th>Account</th>
+        <th>Symbol</th>
+        <th>Total Shares</th>
+        <th>Avg Buy Price</th>
+        <th>Total Invested</th>
+        <th>Last Updated</th>
+      </tr>
+    </thead>
+    <tbody id="positionsBody">
+      <tr><td colspan="6">Loading positions...</td></tr>
+    </tbody>
+  </table>
+
+  <hr>
+
+  <h3>3. Redis Stream Log (XRANGE stream:trades)</h3>
+  <button onclick="loadStream()">Refresh Stream</button>
+  <p><small>Total Stream Events: <strong id="streamCount">0</strong></small></p>
+  <table border="1" cellpadding="6" cellspacing="0" style="margin-top: 10px; width: 100%; max-width: 800px;">
+    <thead>
+      <tr style="background: #eee;">
+        <th>Stream ID</th>
+        <th>Side</th>
+        <th>Account</th>
+        <th>Symbol</th>
+        <th>Quantity</th>
+        <th>Price</th>
+        <th>Timestamp</th>
+      </tr>
+    </thead>
+    <tbody id="streamTableBody">
+      <tr><td colspan="7">No stream events found.</td></tr>
+    </tbody>
+  </table>
+
+  <h4>Raw Stream JSON (Replay)</h4>
+  <pre id="streamLog" style="background: #f4f4f4; padding: 10px; border: 1px solid #ccc; max-height: 200px; overflow: auto;">No events yet.</pre>
+
+  <script>
+    async function checkStatus() {
+      try {
+        const res = await fetch('/api/health');
+        const data = await res.json();
+        document.getElementById('redisStatus').innerText = data.status === 'ok' ? `Connected (PONG) [${data.host}]` : 'Error';
+      } catch (err) {
+        document.getElementById('redisStatus').innerText = 'Offline / Error';
+      }
+    }
+
+    async function handleTrade(e) {
+      e.preventDefault();
+      const account = document.getElementById('account').value.trim();
+      const symbol = document.getElementById('symbol').value.trim();
+      const quantity = parseFloat(document.getElementById('quantity').value);
+      const price = parseFloat(document.getElementById('price').value);
+
+      const res = await fetch('/api/trade/buy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account, symbol, quantity, price })
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        alert(`Trade executed for Account: ${account}, Symbol: ${symbol}! Appended to Redis stream.`);
+        loadPositions();
+        loadStream();
+      } else {
+        alert('Error: ' + (data.error || 'Failed'));
+      }
+    }
+
+    async function loadPositions() {
+      try {
+        const res = await fetch('/api/positions');
+        const data = await res.json();
+        const tbody = document.getElementById('positionsBody');
+
+        if (!data.positions || data.positions.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="6">No active positions in Redis cache.</td></tr>';
+          return;
+        }
+
+        tbody.innerHTML = data.positions.map(p => `
+          <tr>
+            <td><strong>${p.account}</strong></td>
+            <td><b>${p.symbol}</b></td>
+            <td>${p.shares}</td>
+            <td>$${p.avg_price}</td>
+            <td>$${p.total_invested}</td>
+            <td>${new Date(p.last_updated).toLocaleTimeString()}</td>
+          </tr>
+        `).join('');
+      } catch (err) {
+        console.error('Failed to load positions', err);
+      }
+    }
+
+    async function loadStream() {
+      try {
+        const res = await fetch('/api/stream/trades');
+        const data = await res.json();
+        const streamTbody = document.getElementById('streamTableBody');
+        const log = document.getElementById('streamLog');
+        const count = document.getElementById('streamCount');
+
+        if (!data.trades || data.trades.length === 0) {
+          streamTbody.innerHTML = '<tr><td colspan="7">No events in stream.</td></tr>';
+          log.innerText = 'No events in stream.';
+          count.innerText = '0';
+          return;
+        }
+
+        count.innerText = data.total;
+        log.innerText = JSON.stringify(data.trades, null, 2);
+
+        streamTbody.innerHTML = data.trades.map(t => `
+          <tr>
+            <td><small>${t.streamId}</small></td>
+            <td>${t.side || 'BUY'}</td>
+            <td><strong>${t.account}</strong></td>
+            <td>${t.symbol}</td>
+            <td>${t.quantity}</td>
+            <td>$${t.price}</td>
+            <td><small>${t.timestamp ? new Date(parseInt(t.timestamp)).toLocaleTimeString() : ''}</small></td>
+          </tr>
+        `).join('');
+      } catch (err) {
+        console.error('Failed to load stream', err);
+      }
+    }
+
+    async function resetCache() {
+      if (!confirm('Clear Redis stream and all position cache?')) return;
+      const res = await fetch('/api/reset', { method: 'POST' });
+      const data = await res.json();
+      alert(data.message || 'Cleared');
+      loadPositions();
+      loadStream();
+    }
+
+    // Initial load
+    checkStatus();
+    loadPositions();
+    loadStream();
+  </script>
+</body>
+</html>
