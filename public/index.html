@@ -2,11 +2,11 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Minimal Redis Trade POC</title>
+  <title>Minimal Redis Trade POC - DSE</title>
 </head>
 <body>
 
-  <h2>OMS Redis Trade POC</h2>
+  <h2>OMS Redis Trade POC (DSE Market)</h2>
   <p><strong>Redis Status:</strong> <span id="redisStatus">Checking...</span></p>
   <button onclick="resetCache()">Reset All Redis Data</button>
 
@@ -15,21 +15,43 @@
   <h3>1. Execute Buy Trade</h3>
   <form id="tradeForm" onsubmit="handleTrade(event)">
     <p>
-      <label>Account ID: </label><br>
-      <input type="text" id="account" value="ACC_001" required placeholder="e.g. ACC_001 or 002">
+      <label><strong>Account ID:</strong></label><br>
+      <select id="accountSelect" onchange="syncAccount(this.value)">
+        <option value="ACC_001">ACC_001 (Client 1)</option>
+        <option value="ACC_002">ACC_002 (Client 2)</option>
+        <option value="ACC_003">ACC_003 (Client 3)</option>
+        <option value="ACC_004">ACC_004 (Client 4)</option>
+        <option value="custom">-- Type Custom Account --</option>
+      </select>
+      <input type="text" id="account" value="ACC_001" style="display: none; margin-top: 4px;" placeholder="Custom Account ID">
     </p>
+
     <p>
-      <label>Symbol: </label><br>
-      <input type="text" id="symbol" value="AAPL" required placeholder="e.g. AAPL, TSLA">
+      <label><strong>DSE Symbol:</strong></label><br>
+      <select id="symbolSelect" onchange="onSymbolChange(this.value)">
+        <option value="GP" data-price="285.50">GP (Grameenphone) - ৳285.50</option>
+        <option value="SQURPHARMA" data-price="220.40">SQURPHARMA (Square Pharma) - ৳220.40</option>
+        <option value="BATBC" data-price="518.70">BATBC (British American Tobacco) - ৳518.70</option>
+        <option value="BEXIMCO" data-price="115.60">BEXIMCO (Beximco Ltd) - ৳115.60</option>
+        <option value="BRACBANK" data-price="42.80">BRACBANK (BRAC Bank) - ৳42.80</option>
+        <option value="RENATA" data-price="845.00">RENATA (Renata Ltd) - ৳845.00</option>
+        <option value="LHBL" data-price="68.20">LHBL (LafargeHolcim) - ৳68.20</option>
+        <option value="OLYMPIC" data-price="152.30">OLYMPIC (Olympic Industries) - ৳152.30</option>
+        <option value="custom" data-price="100.00">-- Custom Symbol --</option>
+      </select>
+      <input type="text" id="symbol" value="GP" style="display: none; margin-top: 4px;" placeholder="Type custom symbol">
     </p>
+
     <p>
-      <label>Quantity: </label><br>
-      <input type="number" id="quantity" value="10" step="any" min="1" required>
+      <label><strong>Quantity (Shares):</strong></label><br>
+      <input type="number" id="quantity" value="100" step="any" min="1" required>
     </p>
+
     <p>
-      <label>Price ($): </label><br>
-      <input type="number" id="price" value="150.00" step="any" min="0.01" required>
+      <label><strong>Price (BDT / ৳):</strong></label><br>
+      <input type="number" id="price" value="285.50" step="any" min="0.01" required>
     </p>
+
     <p>
       <button type="submit" id="submitBtn">Submit Buy Order</button>
     </p>
@@ -39,14 +61,14 @@
 
   <h3>2. Positions Cache (All Accounts in Redis Hashes)</h3>
   <button onclick="loadPositions()">Refresh Positions</button>
-  <table border="1" cellpadding="6" cellspacing="0" style="margin-top: 10px; width: 100%; max-width: 800px;">
+  <table border="1" cellpadding="6" cellspacing="0" style="margin-top: 10px; width: 100%; max-width: 850px;">
     <thead>
       <tr style="background: #eee;">
         <th>Account</th>
-        <th>Symbol</th>
+        <th>DSE Symbol</th>
         <th>Total Shares</th>
-        <th>Avg Buy Price</th>
-        <th>Total Invested</th>
+        <th>Avg Buy Price (৳)</th>
+        <th>Total Invested (৳)</th>
         <th>Last Updated</th>
       </tr>
     </thead>
@@ -60,7 +82,7 @@
   <h3>3. Redis Stream Log (XRANGE stream:trades)</h3>
   <button onclick="loadStream()">Refresh Stream</button>
   <p><small>Total Stream Events: <strong id="streamCount">0</strong></small></p>
-  <table border="1" cellpadding="6" cellspacing="0" style="margin-top: 10px; width: 100%; max-width: 800px;">
+  <table border="1" cellpadding="6" cellspacing="0" style="margin-top: 10px; width: 100%; max-width: 850px;">
     <thead>
       <tr style="background: #eee;">
         <th>Stream ID</th>
@@ -68,7 +90,7 @@
         <th>Account</th>
         <th>Symbol</th>
         <th>Quantity</th>
-        <th>Price</th>
+        <th>Price (৳)</th>
         <th>Timestamp</th>
       </tr>
     </thead>
@@ -81,6 +103,38 @@
   <pre id="streamLog" style="background: #f4f4f4; padding: 10px; border: 1px solid #ccc; max-height: 200px; overflow: auto;">No events yet.</pre>
 
   <script>
+    function syncAccount(val) {
+      const input = document.getElementById('account');
+      if (val === 'custom') {
+        input.style.display = 'inline-block';
+        input.value = '';
+        input.focus();
+      } else {
+        input.style.display = 'none';
+        input.value = val;
+      }
+    }
+
+    function onSymbolChange(val) {
+      const input = document.getElementById('symbol');
+      const select = document.getElementById('symbolSelect');
+      const selectedOption = select.options[select.selectedIndex];
+      const defaultPrice = selectedOption.getAttribute('data-price');
+
+      if (defaultPrice) {
+        document.getElementById('price').value = defaultPrice;
+      }
+
+      if (val === 'custom') {
+        input.style.display = 'inline-block';
+        input.value = '';
+        input.focus();
+      } else {
+        input.style.display = 'none';
+        input.value = val;
+      }
+    }
+
     async function checkStatus() {
       try {
         const res = await fetch('/api/health');
@@ -93,10 +147,19 @@
 
     async function handleTrade(e) {
       e.preventDefault();
-      const account = document.getElementById('account').value.trim();
-      const symbol = document.getElementById('symbol').value.trim();
+      const accountSelect = document.getElementById('accountSelect').value;
+      const account = (accountSelect === 'custom' ? document.getElementById('account').value : accountSelect).trim();
+      
+      const symbolSelect = document.getElementById('symbolSelect').value;
+      const symbol = (symbolSelect === 'custom' ? document.getElementById('symbol').value : symbolSelect).trim();
+      
       const quantity = parseFloat(document.getElementById('quantity').value);
       const price = parseFloat(document.getElementById('price').value);
+
+      if (!account || !symbol) {
+        alert('Please specify both Account and Symbol.');
+        return;
+      }
 
       const res = await fetch('/api/trade/buy', {
         method: 'POST',
@@ -106,7 +169,7 @@
 
       const data = await res.json();
       if (res.ok) {
-        alert(`Trade executed for Account: ${account}, Symbol: ${symbol}! Appended to Redis stream.`);
+        alert(`Trade executed! Buy ${quantity} ${symbol} @ ৳${price} for ${account}. Appended to Redis Stream.`);
         loadPositions();
         loadStream();
       } else {
@@ -129,9 +192,9 @@
           <tr>
             <td><strong>${p.account}</strong></td>
             <td><b>${p.symbol}</b></td>
-            <td>${p.shares}</td>
-            <td>$${p.avg_price}</td>
-            <td>$${p.total_invested}</td>
+            <td>${parseFloat(p.shares).toLocaleString()}</td>
+            <td>৳${parseFloat(p.avg_price).toFixed(2)}</td>
+            <td>৳${parseFloat(p.total_invested).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
             <td>${new Date(p.last_updated).toLocaleTimeString()}</td>
           </tr>
         `).join('');
@@ -164,8 +227,8 @@
             <td>${t.side || 'BUY'}</td>
             <td><strong>${t.account}</strong></td>
             <td>${t.symbol}</td>
-            <td>${t.quantity}</td>
-            <td>$${t.price}</td>
+            <td>${parseFloat(t.quantity).toLocaleString()}</td>
+            <td>৳${parseFloat(t.price).toFixed(2)}</td>
             <td><small>${t.timestamp ? new Date(parseInt(t.timestamp)).toLocaleTimeString() : ''}</small></td>
           </tr>
         `).join('');

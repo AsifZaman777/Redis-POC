@@ -30,20 +30,18 @@ if (REDIS_USERNAME) redisOptions.username = REDIS_USERNAME;
 const redis = new Redis(redisOptions);
 
 redis.on('connect', () => {
-  console.log(`✅ [Redis] Connected successfully to ${REDIS_HOST}:${REDIS_PORT}`);
+  console.log(`Redis Connected successfully to ${REDIS_HOST}:${REDIS_PORT}`);
 });
 
 redis.on('ready', () => {
-  console.log(`⚡ [Redis] Ready to accept commands`);
+  console.log(`Redis Ready to accept commands`);
 });
 
 redis.on('error', (err) => {
-  console.error('❌ [Redis] Connection Error:', err.message);
+  console.error('Redis Connection Error:', err.message);
 });
 
-/**
- * Health / Connection check
- */
+// health and conn
 app.get('/api/health', async (req, res) => {
   try {
     const ping = await redis.ping();
@@ -81,7 +79,7 @@ app.post('/api/trade/buy', async (req, res) => {
     const tradeTimestamp = Date.now();
     const tradeId = `TRD_${Date.now()}_${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
 
-    // --- STEP 1: Append trade event to Redis Stream (XADD) ---
+    //step1:append trade event to Redis Stream (XADD)
     const streamKey = 'stream:trades';
     const streamEntryId = await redis.xadd(
       streamKey,
@@ -96,7 +94,7 @@ app.post('/api/trade/buy', async (req, res) => {
       'timestamp', tradeTimestamp.toString()
     );
 
-    // --- STEP 2: Read current position cache from Redis Hash ---
+    //step2:Read current position cache from Redis Hash (HSET)
     const positionKey = `position:${account}:${cleanSymbol}`;
     const existingPosition = await redis.hgetall(positionKey);
 
@@ -110,13 +108,56 @@ app.post('/api/trade/buy', async (req, res) => {
       totalInvested = currentQty * currentAvgPrice;
     }
 
-    // --- STEP 3: Compute updated Position (Weighted Average Price) ---
+    //step3: Compute updated Position (Weighted Average Price)
     const newQty = currentQty + qty;
     const newTotalInvested = totalInvested + (qty * unitPrice);
     const newAvgPrice = newTotalInvested / newQty;
 
-    // --- STEP 4: Update Redis Cache (Hash & Set) via Pipeline ---
-    const pipeline = redis.pipeline();
+    //step4: Update Redis Cache (Hash & Set)
+    const pipeline = redis.pipeline(); // for batch operations
+
+    /*
+    without pipeline batch opt will look like that
+        await redis.hset(positionKey, {
+        symbol: cleanSymbol,
+        account: account,
+        shares: newQty.toFixed(4),
+        avg_price: newAvgPrice.toFixed(4),
+        total_invested: newTotalInvested.toFixed(2),
+        last_trade_id: tradeId,
+        last_updated: new Date(tradeTimestamp).toISOString()
+    });
+
+    await redis.sadd(`account:${account}:symbols`, cleanSymbol);
+    await redis.sadd('accounts:all', account);
+  
+    problem:
+    - hgetall is slow when there are many accounts
+    - when we load all positions, it takes too long to fetch all accounts
+    - too many network round trips
+
+    Node.js App                      Redis Server
+    │                                 │
+    ├───── 1. HSET position ─────────▶│
+    │◀──── 1. "OK" ───────────────────┤  (RTT - 5ms)
+    │                                 │
+    ├───── 2. SADD symbols ──────────▶│
+    │◀──── 2. 1 ──────────────────────┤  (RTT - 5ms)
+    │                                 │
+    ├───── 3. SADD accounts ─────────▶│
+    │◀──── 3. 1 ──────────────────────┤  (RTT - 5ms)
+    total -15ms
+
+    solution:
+    - use pipeline for batch operations
+
+    Node.js App                                  Redis Server
+    │                                             │
+    ├───── [HSET + SADD + SADD] (Single Packet) ─▶│ 
+    │                                             │
+    │◀──── [OK, 1, 1] (Single Response) ──────────┤ (RTT - 5ms)
+
+    */
     
     // Hash stores real-time aggregated position details
     pipeline.hset(positionKey, {
@@ -282,9 +323,9 @@ app.post('/api/reset', async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`\n=================================================`);
-  console.log(`🚀 OMS Redis Buy Trade POC running at:`);
-  console.log(`👉 Web UI:       http://localhost:${PORT}`);
-  console.log(`👉 Redis Host:   ${REDIS_HOST}:${REDIS_PORT}`);
-  console.log(`👉 Redis Stream: stream:trades`);
+  console.log(`OMS Redis Buy Trade POC running at:`);
+  console.log(`Web UI:       http://localhost:${PORT}`);
+  console.log(`Redis Host:   ${REDIS_HOST}:${REDIS_PORT}`);
+  console.log(`Redis Stream: stream:trades`);
   console.log(`=================================================\n`);
 });
